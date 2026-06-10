@@ -1,0 +1,14 @@
+# HimOP HoneyFarm - Proxies File
+# Format: http://user:pass@ip:port (one per line)
+# Also supported: socks5://user:pass@ip:port
+#
+# Examples:
+# http://proxyuser:proxypass@123.45.67.89:8080
+# socks5://user:pass@98.76.54.32:1080
+#
+# NOTE: Each account uses 10 proxies = 10 devices.
+# For 100 accounts you need 1000 proxies in this file.
+# Lines starting with # are ignored.
+
+http://username:password@123.45.67.89:8080
+http://username:password@123.45.67.90:8080

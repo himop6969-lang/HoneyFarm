@@ -1,0 +1,5 @@
+# Format: email:password (one account per line)
+# Note: You can add as many accounts as you want, just make sure you have enough proxies in proxies.txt (10 proxies per account)
+
+example1@gmail.com:password123
+example2@gmail.com:password456
