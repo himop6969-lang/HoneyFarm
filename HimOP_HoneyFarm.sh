@@ -25,95 +25,9 @@ RESET='\033[0m'
 # ─── ZERO TWO ANIMATION ───────────────────────────────────────
 play_zerotwo() {
     local DURATION="${1:-5}"
-    if command -v python3 &>/dev/null; then
-        python3 -c '
-import cv2
-import os
-import time
-import shutil
-import sys
-from colorama import init
-
-init()
-
-def render_gif(url_or_path, duration_seconds=None):
-    gif_cache = os.path.join("/tmp", "zerotwo.gif")
-
-    if url_or_path.startswith("http"):
-        if not os.path.exists(gif_cache):
-            import urllib.request
-            print("  Downloading Zero Two... (only once)")
-            req = urllib.request.Request(url_or_path, headers={"User-Agent": "Mozilla/5.0"})
-            with urllib.request.urlopen(req) as response, open(gif_cache, "wb") as f:
-                f.write(response.read())
-        path = gif_cache
-    else:
-        path = url_or_path
-
-    cap = cv2.VideoCapture(path)
-
-    if not cap.isOpened():
-        return
-
-    os.system("cls" if os.name == "nt" else "clear")
-
-    start_time = time.time()
-
-    try:
-        while True:
-            if duration_seconds and (time.time() - start_time) >= duration_seconds:
-                break
-
-            ret, frame = cap.read()
-            if not ret:
-                cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
-                continue
-
-            cols, rows = shutil.get_terminal_size((80, 24))
-
-            orig_h, orig_w = frame.shape[:2]
-            aspect_ratio = orig_h / orig_w
-
-            target_width = cols - 1
-            target_height = int(target_width * aspect_ratio)
-
-            max_height = (rows - 1) * 2
-            if target_height > max_height:
-                target_height = max_height
-                target_width = int(target_height / aspect_ratio)
-
-            if target_height % 2 != 0:
-                target_height -= 1
-
-            frame = cv2.resize(frame, (target_width, target_height))
-
-            output = ""
-            for i in range(0, target_height, 2):
-                for j in range(target_width):
-                    b1, g1, r1 = frame[i, j]
-                    b2, g2, r2 = frame[i + 1, j] if (i + 1) < target_height else (0, 0, 0)
-                    output += f"\033[38;2;{r1};{g1};{b1}m\033[48;2;{r2};{g2};{b2}m▀\033[0m"
-                output += "\n"
-
-            print("\033[H" + output, end="", flush=True)
-            time.sleep(0.05)
-
-    except KeyboardInterrupt:
-        pass
-    finally:
-        cap.release()
-        os.system("cls" if os.name == "nt" else "clear")
-
-if __name__ == "__main__":
-    duration = None
-    if len(sys.argv) > 1:
-        try:
-            duration = float(sys.argv[1])
-        except ValueError:
-            duration = None
-
-    render_gif("https://media.giphy.com/media/Te7SIBNsGk17VFadmi/giphy.gif", duration_seconds=duration)
-' "$DURATION"
+    local ZEROTWO_PY="$SCRIPT_DIR/play_zerotwo.py"
+    if command -v python3 &>/dev/null && [ -f "$ZEROTWO_PY" ]; then
+        python3 "$ZEROTWO_PY" "$DURATION" 2>/dev/null || true
     fi
 }
 
@@ -135,8 +49,7 @@ show_logo() {
     echo "  ██║  ██║╚██████╔╝██║ ╚████║███████╗   ██║   ██║     ██║  ██║██║  ██║██║ ╚═╝ ██║"
     echo "  ╚═╝  ╚═╝ ╚═════╝ ╚═╝  ╚═══╝╚══════╝   ╚═╝   ╚═╝     ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝     ╚═╝"
     echo -e "${CYAN}"
-    echo "    ♦  Mass Honeygain Deployer  ♦  Sidecar Architecture  ♦  Zero Two Edition  ♦"
-    echo -e "${DIM}${WHITE}    Version 1.0.0  |  github: HimOP  |  Architecture: Docker + Tun2Proxy${RESET}"
+    echo "    ♦  Mass Honeygain Deployer  ♦  Docker Sidecar Architecture  ♦"
     echo -e "${YELLOW}    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
     echo ""
 }
@@ -198,17 +111,43 @@ do_start() {
     # 2. Static logo
     show_logo
 
-    # 3. Validate files
+    # 3. Validate files and TUN device
     if [ ! -f "$ACCOUNTS_FILE" ]; then
         echo -e "${RED}  [!] honeygain.txt not found!${RESET}"; exit 1
     fi
     if [ ! -f "$PROXIES_FILE" ]; then
         echo -e "${RED}  [!] proxies.txt not found!${RESET}"; exit 1
     fi
+    if [ ! -c /dev/net/tun ]; then
+        echo -e "${RED}  [!] /dev/net/tun not found!${RESET}"
+        echo -e "${YELLOW}  Fix: mkdir -p /dev/net && mknod /dev/net/tun c 10 200 && chmod 666 /dev/net/tun${RESET}"
+        exit 1
+    fi
+
+    # Pull images once before starting containers
+    echo -e "${YELLOW}  [+] Pulling Docker images...${RESET}"
+    sudo docker pull ghcr.io/tun2proxy/tun2proxy:v0.7.16 -q
+    sudo docker pull honeygain/honeygain:latest -q
+    echo -e "${GREEN}  [+] Images ready.${RESET}\n"
 
     # 4. Load data (strip Windows \r and blank lines and comment lines)
     mapfile -t ACCOUNTS < <(sed 's/\r//' "$ACCOUNTS_FILE" | grep -v '^\s*$' | grep -v '^\s*#')
-    mapfile -t PROXIES  < <(sed 's/\r//' "$PROXIES_FILE"  | grep -v '^\s*$' | grep -v '^\s*#')
+    mapfile -t RAW_PROXIES < <(sed 's/\r//' "$PROXIES_FILE" | grep -v '^\s*$' | grep -v '^\s*#')
+
+    # Auto-convert ip:port:user:pass → http://user:pass@ip:port
+    PROXIES=()
+    for RAW in "${RAW_PROXIES[@]}"; do
+        if [[ "$RAW" == http://* ]] || [[ "$RAW" == socks5://* ]]; then
+            # Already in URL format, use as-is
+            PROXIES+=("$RAW")
+        else
+            # Assume ip:port:user:pass format
+            IFS=':' read -r _IP _PORT _USER _PASS <<< "$RAW"
+            if [ -n "$_IP" ] && [ -n "$_PORT" ] && [ -n "$_USER" ] && [ -n "$_PASS" ]; then
+                PROXIES+=("http://${_USER}:${_PASS}@${_IP}:${_PORT}")
+            fi
+        fi
+    done
 
     TOTAL_ACCS=${#ACCOUNTS[@]}
     TOTAL_PROXIES=${#PROXIES[@]}
@@ -266,33 +205,35 @@ do_start() {
                    "$((ACC_IDX+1))" "$DISPLAY_EMAIL" "$DEV" "$DISPLAY_PROXY"
 
             # Remove stale containers silently
-            docker rm -f "$PROXY_CTR" "$HG_CTR" &>/dev/null
+            sudo docker rm -f "$PROXY_CTR" "$HG_CTR" &>/dev/null
 
-            # Start Proxy sidecar
-            docker run -d \
+            # Start Proxy sidecar (InternetIncome exact pattern)
+            PROXY_CTR_ID=$(sudo docker run -d \
                 --name "$PROXY_CTR" \
                 --restart=always \
                 --sysctl net.ipv6.conf.default.disable_ipv6=0 \
                 --device /dev/net/tun \
                 --cap-add=NET_ADMIN \
                 ghcr.io/tun2proxy/tun2proxy:v0.7.16 \
-                --proxy "$PROXY" &>/dev/null
+                --dns virtual \
+                --proxy "$PROXY" \
+                --verbosity off 2>/tmp/himop_proxy_err.txt)
             PROXY_OK=$?
 
-            if [ "$PROXY_OK" -ne 0 ]; then
-                # Move cursor up 1 line and overwrite with FAIL
+            if [ -z "$PROXY_CTR_ID" ] || [ "$PROXY_OK" -ne 0 ]; then
+                PROXY_ERR=$(cat /tmp/himop_proxy_err.txt 2>/dev/null)
                 printf "\033[1A\033[2K"
-                printf "  %-5s  %-32s  %-4s  %-36s  ${RED}✗ proxy failed${RESET}\n" \
-                       "$((ACC_IDX+1))" "$DISPLAY_EMAIL" "$DEV" "$DISPLAY_PROXY"
+                printf "  %-5s  %-32s  %-4s  %-36s  ${RED}✗ %s${RESET}\n" \
+                       "$((ACC_IDX+1))" "$DISPLAY_EMAIL" "$DEV" "$DISPLAY_PROXY" "$PROXY_ERR"
                 ((TOTAL_FAIL++))
                 ((PROXY_INDEX++))
                 continue
             fi
 
-            sleep 1
+            sleep 2
 
-            # Start Honeygain container
-            docker run -d \
+            # Start Honeygain container (InternetIncome exact pattern)
+            HG_CTR_ID=$(sudo docker run -d \
                 --name "$HG_CTR" \
                 --network="container:$PROXY_CTR" \
                 --restart=always \
@@ -300,7 +241,7 @@ do_start() {
                 -tou-accept \
                 -email "$EMAIL" \
                 -pass "$PASS" \
-                -device "$DEVICE_NAME" &>/dev/null
+                -device "$DEVICE_NAME" 2>/tmp/himop_hg_err.txt)
             HG_OK=$?
 
             # Move cursor up 1 line and overwrite with result
@@ -312,7 +253,7 @@ do_start() {
             else
                 printf "  %-5s  %-32s  %-4s  %-36s  ${RED}✗ hg failed${RESET}\n" \
                        "$((ACC_IDX+1))" "$DISPLAY_EMAIL" "$DEV" "$DISPLAY_PROXY"
-                docker rm -f "$PROXY_CTR" &>/dev/null
+                sudo docker rm -f "$PROXY_CTR" &>/dev/null
                 ((TOTAL_FAIL++))
             fi
 
@@ -334,7 +275,7 @@ do_status() {
     show_logo
     echo -e "${CYAN}${BOLD}[*] HimOP HoneyFarm — Live Status${RESET}\n"
 
-    CONTAINERS=$(docker ps -a --filter "name=${PREFIX}_hg_" --format "{{.Names}}\t{{.Status}}")
+    CONTAINERS=$(sudo docker ps -a --filter "name=${PREFIX}_hg_" --format "{{.Names}}\t{{.Status}}")
 
     if [ -z "$CONTAINERS" ]; then
         echo -e "  ${YELLOW}No HimOP containers found. Run --start first.${RESET}\n"; exit 0
@@ -364,12 +305,12 @@ do_stop() {
     show_logo
     echo -e "${RED}${BOLD}[*] Stopping all HimOP HoneyFarm containers...${RESET}\n"
 
-    HG_CTRS=$(docker ps -a --filter "name=${PREFIX}_hg_"    --format "{{.Names}}")
-    PX_CTRS=$(docker ps -a --filter "name=${PREFIX}_proxy_" --format "{{.Names}}")
+    HG_CTRS=$(sudo docker ps -a --filter "name=${PREFIX}_hg_"    --format "{{.Names}}")
+    PX_CTRS=$(sudo docker ps -a --filter "name=${PREFIX}_proxy_" --format "{{.Names}}")
 
     COUNT=0
     for CTR in $HG_CTRS $PX_CTRS; do
-        docker rm -f "$CTR" &>/dev/null
+        sudo docker rm -f "$CTR" &>/dev/null
         echo -e "  ${RED}✗  Removed: $CTR${RESET}"
         ((COUNT++))
     done
